@@ -1,0 +1,197 @@
+use std::{borrow::Borrow, collections::HashMap, hash::Hash, marker::PhantomData, ptr::NonNull};
+
+struct Node<K, V> {
+    k: K,
+    v: V,
+    prev: Option<NonNull<Node<K, V>>>,
+    next: Option<NonNull<Node<K, V>>>,
+}
+
+struct KeyRef<K, V>(NonNull<Node<K, V>>);
+
+impl<K: Hash + Eq, V> Borrow<K> for KeyRef<K, V> {
+    fn borrow(&self) -> &K {
+        unsafe { &self.0.as_ref().k }
+    }
+}
+
+impl<K: Hash, V> Hash for KeyRef<K, V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unsafe { self.0.as_ref().k.hash(state) }
+    }
+}
+
+impl<K: Eq, V> PartialEq for KeyRef<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { self.0.as_ref().k.eq(&other.0.as_ref().k) }
+    }
+}
+
+impl<K: Eq, V> Eq for KeyRef<K, V> {}
+
+impl<K, V> Node<K, V> {
+    fn new(k: K, v: V) -> Self {
+        Self {
+            k,
+            v,
+            prev: None,
+            next: None,
+        }
+    }
+}
+
+pub struct LruCache<K, V> {
+    head: Option<NonNull<Node<K, V>>>,
+    tail: Option<NonNull<Node<K, V>>>,
+    map: HashMap<KeyRef<K, V>, NonNull<Node<K, V>>>,
+    cap: usize,
+    count_head: Option<NonNull<Node<K, usize>>>,
+    count_tail: Option<NonNull<Node<K, usize>>>,
+    count_map: HashMap<KeyRef<K, usize>, NonNull<Node<K, usize>>>,
+    cap2: usize,
+    k: usize,
+    marker: PhantomData<Node<K, V>>,
+}
+
+impl<K: Hash + Eq + PartialEq, V> LruCache<K, V> {
+    pub fn new(cap: usize, cap2: usize, k: usize) -> Self {
+        Self {
+            head: None,
+            tail: None,
+            map: HashMap::new(),
+            cap,
+            count_head: None,
+            count_tail: None,
+            count_map: HashMap::new(),
+            cap2,
+            k,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn put(&mut self, k: K, v: V) -> Option<V> {
+        let node = Box::leak(Box::new(Node::new(k, v))).into();
+        let old_node = self.map.remove(&KeyRef(node)).map(|node| {
+            self.detach(node);
+            node
+        });
+        if old_node.is_none() && self.map.len() >= self.cap {
+            let tail = self.tail.unwrap();
+            self.detach(tail);
+            self.map.remove(&KeyRef(tail));
+        }
+        self.attach(node);
+        self.map.insert(KeyRef(node), node);
+        old_node.map(|node| unsafe {
+            let node = Box::from_raw(node.as_ptr());
+            node.v
+        })
+    }
+
+    pub fn put2(&mut self, k: K, v: usize) -> Option<usize> {
+        let node = Box::leak(Box::new(Node::new(k, v))).into();
+        let old_node = self.count_map.remove(&KeyRef(node)).map(|node| {
+            self.detach2(node);
+            node
+        });
+        if old_node.is_none() && self.count_map.len() >= self.cap2 {
+            let tail = self.tail.unwrap();
+            self.detach2(tail);
+            self.count_map.remove(&KeyRef(tail));
+        }
+        self.attach2(node);
+        self.count_map.insert(KeyRef(node), node);
+        old_node.map(|node| unsafe {
+            let node = Box::from_raw(node.as_ptr());
+            node.v
+        })
+    }
+
+    pub fn get(&mut self, k: &K) -> Option<&V> {
+        let count = 1;
+        if let Some(node) = self.count_map.get(k) {
+            let node = *node;
+            self.detach2(node);
+            self.attach2(node);
+            unsafe {
+                count = Some(&node.as_ref().v) + 1;
+                self.put2(k, count);
+            }
+        } else {
+            self.put2(k, count);
+        }
+
+        if let Some(node) = self.map.get(k) {
+            let node = *node;
+            if (count > self.k) {
+                self.detach(node);
+                self.attach(node);
+            }
+            unsafe { Some(&node.as_ref().v) }
+        } else {
+            None
+        }
+    }
+
+    fn detach(&mut self, mut node: NonNull<Node<K, V>>) {
+        unsafe {
+            match node.as_mut().prev {
+                Some(mut prev) => {
+                    prev.as_mut().next = node.as_ref().next;
+                }
+                None => {
+                    self.head = node.as_ref().next;
+                }
+            }
+            match node.as_mut().next {
+                Some(mut next) => {
+                    next.as_mut().prev = node.as_ref().prev;
+                }
+                None => {
+                    self.tail = node.as_ref().prev;
+                }
+            }
+
+            node.as_mut().prev = None;
+            node.as_mut().next = None;
+        }
+    }
+
+    fn attach(&mut self, mut node: NonNull<Node<K, V>>) {
+        match self.head {
+            Some(mut head) => {
+                unsafe {
+                    head.as_mut().prev = Some(node);
+                    node.as_mut().next = Some(head);
+                    node.as_mut().prev = None;
+                }
+                self.head = Some(node);
+            }
+            None => {
+                unsafe {
+                    node.as_mut().prev = None;
+                    node.as_mut().next = None;
+                }
+                self.head = Some(node);
+                self.tail = Some(node);
+            }
+        }
+    }
+}
+
+impl<K, V> Drop for LruCache<K, V> {
+    fn drop(&mut self) {
+        while let Some(node) = self.head.take() {
+            unsafe {
+                self.head = node.as_ref().next;
+                drop(node.as_ptr());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {}
+}
