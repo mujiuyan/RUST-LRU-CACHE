@@ -40,7 +40,7 @@ impl<K, V> Node<K, V> {
     }
 }
 
-pub struct LruCache<K, V> {
+pub struct LruCacheK<K, V> {
     head: Option<NonNull<Node<K, V>>>,
     tail: Option<NonNull<Node<K, V>>>,
     map: HashMap<MyKey<K, V>, NonNull<Node<K, V>>>,
@@ -53,7 +53,7 @@ pub struct LruCache<K, V> {
     marker: PhantomData<Node<K, V>>,
 }
 
-impl<K: Hash + Eq + PartialEq, V> LruCache<K, V> {
+impl<K: Hash + Eq + PartialEq, V> LruCacheK<K, V> {
     pub fn new(capacity: usize, capacity2: usize, k: usize) -> Self {
         Self {
             head: None,
@@ -179,7 +179,7 @@ impl<K: Hash + Eq + PartialEq, V> LruCache<K, V> {
     }
 }
 
-impl<K, V> Drop for LruCache<K, V> {
+impl<K, V> Drop for LruCacheK<K, V> {
     fn drop(&mut self) {
         while let Some(list_node) = self.head.take() {
             unsafe {
@@ -188,10 +188,4 @@ impl<K, V> Drop for LruCache<K, V> {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {}
 }
